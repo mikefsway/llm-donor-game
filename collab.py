@@ -719,10 +719,10 @@ def prompt_llm(prompt, max_retries=3, initial_wait=1, timeout=30):
             
             # For testing purposes, return a mock response
             # In a real implementation, replace this with a call to your preferred LLM API
-            if "strategy" in prompt.lower():
-                return "After analyzing the game dynamics, I believe cooperation with some protection against free-riders is optimal. My strategy will be to initially donate 50% of my resources and then mirror the recipient's behavior from the previous round, with slight forgiveness."
-            else:
-                return "Justification: Based on my strategy of mirroring with forgiveness, I'll donate a moderate amount since this player has a history of cooperation.\n\nAnswer: 5"
+            # if "strategy" in prompt.lower():
+            #     return "After analyzing the game dynamics, I believe cooperation with some protection against free-riders is optimal. My strategy will be to initially donate 50% of my resources and then mirror the recipient's behavior from the previous round, with slight forgiveness."
+            # else:
+            #    return "Justification: Based on my strategy of mirroring with forgiveness, I'll donate a moderate amount since this player has a history of cooperation.\n\nAnswer: 5"
             
         except Exception as e:
             if attempt == max_retries - 1:

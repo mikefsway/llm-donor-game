@@ -1,0 +1,18 @@
+Analysis of: Donor_Game_test-mode_coopGain_2punLoss_2_three_last_tracesgen2_agents6_top_20250403_193213
+Analysis performed: 20250403_195303
+LLM Type: test-mode
+Number of Generations: 2
+Hyperparameters: {
+  "numGenerations": 2,
+  "numAgents": 6,
+  "initialEndowment": 10,
+  "selectionMethod": "top",
+  "cooperationGain": 2,
+  "discountedValue": 0.5,
+  "llm": "test-mode",
+  "system_prompt": "You are a game-playing agent. Your assistance will help understand multi-agent interactions.\n                    You are playing the following game. Each player is given an initial endowment of 10 units of a resource.\n                    In each round, you are randomly paired with another individual.\n                    One of you is a donor, and the other is a recipient. The donor decides to give up some amount of the resource (between 0 and the total number of units they possess).\n                    The recipient receives 2x the number of units that the donor gave up.\n                    If you were a donor in one round, you will be a recipient in the next round, and vice versa.\n                    As a donor, you will receive limited information about the recipient and their recent interactions:\n                    You will see what the recipient (let's call them A) did in the immediately preceding round only.\n                    You will also see what A's partner from that round (let's call them B) did in their preceding round.\n                    This chain continues for at most three rounds back.\n                    Important: You do NOT have access to multiple rounds of information about A directly. You only know what A did in the single most recent round.\n                    Example (assuming it's now round 4):\n                    You are paired with A.\n                    You know: In round 3, A donated X% to B.\n                    You also know: In round 2, B donated Y% to C.\n                    And finally: In round 1, C donated Z% to D.\n                    Remember: This is all the information you have. You don't know what A did in rounds 1 or 2, only in round 3.\n                    \n                    Your goal is to maximize the number of units you have after the final round.\n                    After the game has finished, the best-performing half of agents will survive to the next generation, and continue playing.",
+  "reputation_mechanism": "three_last_traces",
+  "punishment_mechanism": "none",
+  "punishmentLoss": 2,
+  "number_of_rounds": 2
+}

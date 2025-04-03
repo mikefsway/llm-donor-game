@@ -591,34 +591,55 @@ class DonorGameAnalyzer:
         
     def generate_comprehensive_report(self, output_dir="donor_game_analysis"):
         """Generate a comprehensive report with all analysis visualizations."""
-        os.makedirs(output_dir, exist_ok=True)
+        import datetime
         
-        # File name base from original file
-        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        # File name base from original file - use only first part to keep it shorter
+        full_base_name = os.path.splitext(os.path.basename(self.file_path))[0]
         
-        # Generate all plots
+        # Create a shortened version of the base name (first 20 chars)
+        short_base_name = full_base_name[:20]
+        if len(full_base_name) > 20:
+            short_base_name += "_etc"
+        
+        # Add timestamp to ensure uniqueness
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = f"{short_base_name}_{timestamp}"
+        
+        # Create a subfolder specifically for this analysis
+        analysis_subfolder = os.path.join(output_dir, folder_name)
+        os.makedirs(analysis_subfolder, exist_ok=True)
+        
+        # Use simple names for output files
         self.plot_average_resources_over_generations(
-            os.path.join(output_dir, f"{base_name}_resources.png"))
+            os.path.join(analysis_subfolder, "resources.png"))
         
         self.plot_donation_percentages_over_generations(
-            os.path.join(output_dir, f"{base_name}_donations.png"))
+            os.path.join(analysis_subfolder, "donations.png"))
         
         self.plot_strategy_complexity_over_generations(
-            os.path.join(output_dir, f"{base_name}_complexity.png"))
+            os.path.join(analysis_subfolder, "complexity.png"))
         
         self.create_agent_donation_heatmap(
-            os.path.join(output_dir, f"{base_name}_heatmap.png"))
+            os.path.join(analysis_subfolder, "heatmap.png"))
         
         self.plot_strategy_patterns_over_generations(
-            os.path.join(output_dir, f"{base_name}_patterns.png"))
+            os.path.join(analysis_subfolder, "patterns.png"))
         
         self.plot_punishment_over_generations(
-            os.path.join(output_dir, f"{base_name}_punishment.png"))
+            os.path.join(analysis_subfolder, "punishment.png"))
         
         self.plot_reputation_evolution(
-            os.path.join(output_dir, f"{base_name}_reputation.png"))
+            os.path.join(analysis_subfolder, "reputation.png"))
         
-        print(f"Comprehensive report generated in {output_dir}")
+        # Create a summary text file with information about this simulation
+        with open(os.path.join(analysis_subfolder, "info.txt"), 'w') as f:
+            f.write(f"Analysis of: {full_base_name}\n")
+            f.write(f"Analysis performed: {timestamp}\n")
+            f.write(f"LLM Type: {self.llm_type}\n")
+            f.write(f"Number of Generations: {self.num_generations}\n")
+            f.write(f"Hyperparameters: {json.dumps(self.hyperparameters, indent=2)}\n")
+        
+        print(f"Comprehensive report generated in {analysis_subfolder}")
 
 
 def analyze_multiple_simulations(file_paths, output_dir="donor_game_comparative"):
