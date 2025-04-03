@@ -796,10 +796,10 @@ def prompt_llm(prompt, max_retries=3, initial_wait=1, timeout=30):
             # return response.content[0].text
             
             # For testing purposes
-            if "strategy" in prompt.lower():
-                return "After analyzing the microgrid dynamics, I believe cooperative consumption reduction with some protection against free-riders is optimal. My strategy will be to initially reduce my consumption by 40% during peak hours and then adjust based on other households' previous behavior, with slight forgiveness for occasional high usage."
-            else:
-                return "Justification: Based on my strategy of cooperative consumption with monitoring, I'll reduce my consumption significantly since this household has shown cooperation in previous days.\n\nAnswer: 6.5"
+            # if "strategy" in prompt.lower():
+            #     return "After analyzing the microgrid dynamics, I believe cooperative consumption reduction with some protection against free-riders is optimal. My strategy will be to initially reduce my consumption by 40% during peak hours and then adjust based on other households' previous behavior, with slight forgiveness for occasional high usage."
+            # else:
+             #    return "Justification: Based on my strategy of cooperative consumption with monitoring, I'll reduce my consumption significantly since this household has shown cooperation in previous days.\n\nAnswer: 6.5"
             
         except Exception as e:
             if attempt == max_retries - 1:
