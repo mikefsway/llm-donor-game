@@ -814,7 +814,7 @@ def prompt_llm(prompt, max_retries=3, initial_wait=1, timeout=30):
 def run_generations(num_generations, num_households, initial_consumption, selection_method,
                    community_benefit_factor, grid_stability_factor, value_persistence_factor,
                    grid_coordination_mechanism, penalty_mechanism, number_of_days,
-                   system_prompt, llm="test-mode", renewable_forecast=100):
+                   system_prompt, llm="test-mode", renewable_forecast=40):
     """
     Main function to run the microgrid simulation for multiple generations.
     """
