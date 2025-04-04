@@ -80,8 +80,8 @@ class HouseholdDailyData:
     household_name: str
     day_number: int
     simulation_number: int
+    paired_with: str = ""  # Keep for backward compatibility but will be phased out
     current_generation: int
-    paired_with: str = ""  # Moved after non-default parameters
     baseline_consumption: int
     consumption_reduction: float
     community_benefit: float
@@ -521,11 +521,11 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         household.grid_cooperation_rating = ((percentage_reduced) + value_persistence_factor * household.grid_cooperation_rating) / (1 + value_persistence_factor)
     
     # Create the household daily data
-    # NOTE: This is where we need to update the order of parameters to match the new dataclass definition
     household_data = HouseholdDailyData(
         household_name=household.name,
         day_number=day_index + 1,
         simulation_number=simulation_number,
+        paired_with="",  # No longer using paired households
         current_generation=generation,
         baseline_consumption=household.baseline_consumption,
         consumption_reduction=consumption_reduction,
@@ -536,9 +536,7 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         is_peak_hours=True,
         traces=household.traces,
         history=household.history,
-        paired_with="",  # This parameter has been moved
         justification=justification,
-        penalized=False,
         is_transparent=household.is_transparent,
         transparency_reward=transparency_reward_amount,
         penalties_received=household.penalties_received,
