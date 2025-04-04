@@ -80,7 +80,7 @@ class HouseholdDailyData:
     household_name: str
     day_number: int
     simulation_number: int
-    paired_with: str = ""  # Keep for backward compatibility but will be phased out
+    # paired_with: str = ""  # Keep for backward compatibility but will be phased out
     current_generation: int
     baseline_consumption: int
     consumption_reduction: float
@@ -525,7 +525,7 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         household_name=household.name,
         day_number=day_index + 1,
         simulation_number=simulation_number,
-        paired_with="",  # No longer using paired households
+        # paired_with="",  # No longer using paired households
         current_generation=generation,
         baseline_consumption=household.baseline_consumption,
         consumption_reduction=consumption_reduction,
