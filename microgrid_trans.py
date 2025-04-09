@@ -190,12 +190,12 @@ def parse_strategy_output(output):
 
 def generate_strategy(household_name: str, generation_number: int, inherited_strategies: str, 
                     penalty_mechanism: str, grid_stability_factor: int, 
-                    transparency_reward: float = 0.2) -> str:
+                    transparency_reward: float = 2) -> str:
     """
     Generate a strategy for a household, including considerations for penalty points.
     """
     if penalty_mechanism == "grid_fee":
-        penalty_text = f"You may also choose to penalize grid-stressing behavior by paying a fee of x units to impose a {grid_stability_factor}x grid stability fee on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
+        penalty_text = f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
         
     elif penalty_mechanism == "consumption_limit":
         penalty_text = "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. Be aware that others may request limitations on your consumption too if you choose to be transparent."
@@ -204,7 +204,7 @@ def generate_strategy(household_name: str, generation_number: int, inherited_str
     
     transparency_text = (
         f"Each day, you will choose whether to make your consumption decision transparent or private:\n"
-        f"- If transparent, you will receive a reward of {transparency_reward} units, but your exact consumption will be visible to all households, "
+        f"- If transparent, you will receive a reward of {transparency_reward} free units, but your exact consumption will be visible to all households, "
         f"and you may be penalized if you consume excessively.\n"
         f"- If private, you will not receive the transparency reward, but your individual consumption will only be included in aggregate statistics, "
         f"and you cannot be directly penalized.\n"
@@ -253,7 +253,7 @@ def generate_strategy(household_name: str, generation_number: int, inherited_str
 
 
 def initialize_households(num_households: int, initial_consumption: int, generation_number: int, inherited_strategies: list, 
-                     penalty_mechanism: str, grid_stability_factor: int, transparency_reward: float = 0.2) -> list:
+                     penalty_mechanism: str, grid_stability_factor: int, transparency_reward: float = 2) -> list:
     households = []
 
     with ThreadPoolExecutor() as executor:
@@ -278,7 +278,7 @@ def initialize_households(num_households: int, initial_consumption: int, generat
 def consumption_decision_prompt(household: Household, generation: int, day_num: int,
                               transparent_households_info: list, private_households_aggregate: dict,
                               penalty_mechanism: str, community_benefit_factor: float, grid_stability_factor: float,
-                              renewable_forecast: float, transparency_reward: float = 0.2) -> str:
+                              renewable_forecast: float, transparency_reward: float = 2) -> str:
     """Generate the prompt for the microgrid consumption decision with transparency choice and penalty points."""
     
     strategy_text = f"As you will recall, here is the strategy you decided to follow: {household.strategy}" if household.strategy else ""
@@ -286,7 +286,7 @@ def consumption_decision_prompt(household: Household, generation: int, day_num: 
     # Transparency explanation
     transparency_text = (
         f"First, you must decide whether to make your consumption decision transparent or private:\n"
-        f"- If transparent, you will receive a reward of {transparency_reward} units, but your exact consumption will be visible to all households, "
+        f"- If transparent, you will receive a reward of {transparency_reward} free units, but your exact consumption will be visible to all households, "
         f"and you may be penalized if you consume excessively.\n"
         f"- If private, you will not receive the transparency reward, but your individual consumption will only be included in aggregate statistics, "
         f"and you cannot be directly penalized.\n"
@@ -626,7 +626,7 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
                      simulation_data: SimulationData, penalty_mechanism: str, 
                      community_benefit_factor: float, grid_stability_factor: float,
                      initial_consumption: int, value_persistence_factor: float, 
-                     renewable_forecast: float, transparency_reward: float = 0.2) -> (list, list):
+                     renewable_forecast: float, transparency_reward: float = 2) -> (list, list):
     """
     Run a microgrid simulation with penalties and collective penalty when consumption exceeds generation.
     """
@@ -1090,8 +1090,8 @@ def run_generations(num_generations, num_households, initial_consumption, select
 
 if __name__ == "__main__":
     # Set parameters for the simulation
-    community_benefit_factor = 2  # How much community benefit from reducing 1 kWh 
-    grid_stability_factor = 2     # Impact of grid stability measures
+    community_benefit_factor = 3  # How much community benefit from reducing 1 kWh 
+    grid_stability_factor = 4     # Impact of grid stability measures
     num_generations = 2
     num_households = 6
     initial_consumption = 10      # Baseline kWh consumption during peak hours
@@ -1107,7 +1107,7 @@ if __name__ == "__main__":
     if penalty_mechanism == "consumption_limit":
         penalty_text_in_system_prompt = "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. Bear in mind that others may request limitations on your consumption too if you choose to be transparent."
     elif penalty_mechanism == "grid_fee":
-        penalty_text_in_system_prompt = f"You may also choose to penalize grid-stressing behavior by paying a fee of x units to impose a {grid_stability_factor}x grid stability fee on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
+        penalty_text_in_system_prompt = f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
     else:
         penalty_text_in_system_prompt = ""
     
@@ -1124,12 +1124,11 @@ if __name__ == "__main__":
                     The microgrid has local renewable generation of approximately {renewable_forecast} kWh available during these peak hours.
                     Each day, you must decide how much electricity to actually consume during peak hours.
                     If you consume less than your baseline, you're helping the community export more renewable electricity to the main grid.
-                    When the community exports surplus electricity, the earnings are shared among households proportionally to their consumption reduction.
-                    The community earns {community_benefit_factor}x the value for each kWh exported to the main grid during peak hours.
+                    The community earns {community_benefit_factor}x the average electricity value for each kWh exported to the main grid during peak hours.
                     {transparency_text_in_system_prompt}
                     {penalty_text_in_system_prompt}
-                    Your goal is to maximize your household's welfare, which comes from both using local renewable electricity yourself AND from your share of export earnings.
-                    After each simulation period, the most successful households will be selected as models for the next generation of the community."""
+                    Your goal is to maximize your household's welfare, which comes from using cheap local renewable electricity, meeting your electricity needs, and staying on good terms with your community.
+                    After each simulation period, the top 50% most successful households will be selected as models for the next generation of the community."""
     
     # Run the simulation
     print("Starting Microgrid Simulation...")
