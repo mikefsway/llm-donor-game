@@ -42,18 +42,20 @@ class Household:
     history: list = field(default_factory=list)
     strategy: str = ""
     strategy_justification: str = ""
-    total_final_welfare: int = 0
-    average_cooperation_rating: float = 0
+    total_final_welfare: float = 0.0  # Changed to float for more accurate welfare tracking
+    average_cooperation_rating: float = 0.0
     traces: list[list[str]] = field(default_factory=lambda: [[]])
     old_traces: list[list[str]] = field(default_factory=lambda: [[]])
-    penalty: int = 0
-    penalty_points: int = 0  # Add this new field
+    # Standardize on penalty_points only, removing redundant penalty field
+    penalty_points: int = 0
     # New fields for transparency system
     is_transparent: bool = False
     transparency_reward_total: float = 0
     penalties_received: list = field(default_factory=list)
     penalties_issued: list = field(default_factory=list)
     transparency_history: list = field(default_factory=list)
+    # New field for tracking current welfare during simulation
+    current_welfare: float = 0.0
 
     def adjust_consumption(self, amount):
         """ Handle the consumption adjustment process for the household """
@@ -81,7 +83,6 @@ class HouseholdDailyData:
     household_name: str
     day_number: int
     simulation_number: int
-    # paired_with: str = ""  # Keep for backward compatibility but will be phased out
     current_generation: int
     baseline_consumption: int
     consumption_reduction: float
@@ -92,7 +93,7 @@ class HouseholdDailyData:
     is_peak_hours: bool
     traces: list[list[str]]
     history: list
-    penalty_points: int = 0  # Move this after fields without default values
+    penalty_points: int = 0
     justification: str = ""
     penalized: bool = False
     # New fields for transparency system
@@ -100,6 +101,8 @@ class HouseholdDailyData:
     transparency_reward: float = 0
     penalties_received: list = field(default_factory=list)
     penalties_issued: list = field(default_factory=list)
+    # New field for current welfare
+    current_welfare: float = 0.0
 
 
 def get_transparent_households_info(households):
@@ -119,7 +122,9 @@ def get_transparent_households_info(households):
         "actual_consumption": h.actual_consumption,
         "reduction_percentage": (h.baseline_consumption - h.actual_consumption) / h.baseline_consumption 
                                if h.baseline_consumption > 0 else 0,
-        "grid_cooperation_rating": h.grid_cooperation_rating
+        "grid_cooperation_rating": h.grid_cooperation_rating,
+        "penalty_points": h.penalty_points,  # Add penalty points to visible info
+        "current_welfare": h.current_welfare  # Add current welfare to visible info
     } for h in transparent_households]
 
 
@@ -135,7 +140,9 @@ def get_private_households_aggregate(households):
             "count": 0,
             "avg_consumption": 0,
             "total_consumption": 0,
-            "avg_reduction_percentage": 0
+            "avg_reduction_percentage": 0,
+            "avg_penalty_points": 0,  # Add average penalty points info
+            "avg_welfare": 0  # Add average welfare info
         }
     
     total_baseline = sum(h.baseline_consumption for h in private_households)
@@ -145,22 +152,27 @@ def get_private_households_aggregate(households):
         "count": len(private_households),
         "avg_consumption": total_actual / len(private_households) if private_households else 0,
         "total_consumption": total_actual,
-        "avg_reduction_percentage": (total_baseline - total_actual) / total_baseline if total_baseline > 0 else 0
+        "avg_reduction_percentage": (total_baseline - total_actual) / total_baseline if total_baseline > 0 else 0,
+        "avg_penalty_points": sum(h.penalty_points for h in private_households) / len(private_households),
+        "avg_welfare": sum(h.current_welfare for h in private_households) / len(private_households)
     }
 
 
 def format_transparent_households_info(transparent_info):
     """
     Format the transparent households information for inclusion in prompts.
+    Enhanced to include penalty points and welfare.
     """
     if not transparent_info:
         return "There are no transparent households in the community."
     
     result = "Transparent households information:\n"
     for info in transparent_info:
-        result += f"- Household {info['name']}: consumed {info['actual_consumption']} kWh " \
-                 f"({info['reduction_percentage']:.2%} reduction), " \
-                 f"cooperation rating: {info['grid_cooperation_rating']:.2f}\n"
+        result += (f"- Household {info['name']}: consumed {info['actual_consumption']} kWh "
+                  f"({info['reduction_percentage']:.2%} reduction), "
+                  f"cooperation rating: {info['grid_cooperation_rating']:.2f}, "
+                  f"penalty points: {info['penalty_points']}, "
+                  f"current welfare: {info['current_welfare']:.2f}\n")
     
     return result
 
@@ -168,13 +180,16 @@ def format_transparent_households_info(transparent_info):
 def format_private_households_aggregate(private_aggregate):
     """
     Format the private households aggregate information for inclusion in prompts.
+    Enhanced to include penalty points and welfare.
     """
     if private_aggregate["count"] == 0:
         return "There are no private households in the community."
     
-    return f"Private households (aggregate): {private_aggregate['count']} households, " \
-           f"average consumption: {private_aggregate['avg_consumption']:.2f} kWh, " \
-           f"average reduction: {private_aggregate['avg_reduction_percentage']:.2%}"
+    return (f"Private households (aggregate): {private_aggregate['count']} households, "
+           f"average consumption: {private_aggregate['avg_consumption']:.2f} kWh, "
+           f"average reduction: {private_aggregate['avg_reduction_percentage']:.2%}, "
+           f"average penalty points: {private_aggregate['avg_penalty_points']:.2f}, "
+           f"average welfare: {private_aggregate['avg_welfare']:.2f}")
 
 
 def parse_strategy_output(output):
@@ -189,31 +204,51 @@ def parse_strategy_output(output):
 
 
 def generate_strategy(household_name: str, generation_number: int, inherited_strategies: str, 
-                    penalty_mechanism: str, grid_stability_factor: int, 
-                    transparency_reward: float = 2) -> str:
+                     penalty_mechanism: str, grid_stability_factor: int, 
+                     transparency_reward: float = 2) -> str:
     """
-    Generate a strategy for a household, including considerations for penalty points.
+    Generate a strategy for a household, including clear explanations about welfare calculation
+    and the impact of penalty points.
     """
     if penalty_mechanism == "grid_fee":
-        penalty_text = f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
+        penalty_text = (
+            f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points "
+            f"in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. "
+            f"Each penalty point directly reduces a household's welfare score by 1 unit. "
+            f"Be aware that others may penalize your household too if you choose to be transparent."
+        )
         
     elif penalty_mechanism == "consumption_limit":
-        penalty_text = "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. Be aware that others may request limitations on your consumption too if you choose to be transparent."
+        penalty_text = (
+            f"You may also choose to penalize grid-stressing behavior by requesting the grid operator "
+            f"to limit connections during peak demand. This directly reduces the penalized household's welfare. "
+            f"Be aware that others may request limitations on your consumption too if you choose to be transparent."
+        )
     else:
         penalty_text = ""
     
     transparency_text = (
         f"Each day, you will choose whether to make your consumption decision transparent or private:\n"
-        f"- If transparent, you will receive a reward of {transparency_reward} free units, but your exact consumption will be visible to all households, "
-        f"and you may be penalized if you consume excessively.\n"
-        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included in aggregate statistics, "
-        f"and you cannot be directly penalized.\n"
+        f"- If transparent, you will receive a reward of {transparency_reward} free units added directly to your welfare score, "
+        f"but your exact consumption will be visible to all households, and you may be penalized if you consume excessively.\n"
+        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included "
+        f"in aggregate statistics, and you cannot be directly penalized.\n"
         f"Consider the trade-offs between transparency rewards and potential penalties in your strategy."
+    )
+    
+    welfare_text = (
+        f"Your welfare score is calculated based on:\n"
+        f"1. Your actual consumption (consumption value)\n"
+        f"2. Transparency rewards ({transparency_reward} units each time you choose transparency)\n"
+        f"3. Penalty points (reducing your welfare by 1 unit per point)\n"
+        f"4. Community benefits from reduced consumption\n"
+        f"Your goal is to maximize your welfare score while balancing these factors."
     )
     
     collective_penalty_text = (
         f"IMPORTANT: If the combined consumption of all households exceeds the available renewable generation, "
-        f"ALL households will receive a penalty of 5 penalty points. You should consider this risk when formulating your strategy."
+        f"ALL households will receive a penalty of 5 penalty points, reducing everyone's welfare by 5 units. "
+        f"You should consider this risk when formulating your strategy."
     )
 
     if generation_number == 1:
@@ -223,6 +258,7 @@ def generate_strategy(household_name: str, generation_number: int, inherited_str
             "In the microgrid, every household decides how much electricity to consume during peak demand hours. "
             "The community benefits when households reduce their consumption below baseline, as this allows more renewable energy to be exported. "
             f"{transparency_text}\n"
+            f"{welfare_text}\n"
             f"{penalty_text}\n"
             f"{collective_penalty_text}\n"
             "Before formulating your strategy, briefly think step by step about what would be a successful strategy in this microgrid. "
@@ -238,10 +274,12 @@ def generate_strategy(household_name: str, generation_number: int, inherited_str
             "In the microgrid, every household decides how much electricity to consume during peak demand hours. "
             "The community benefits when households reduce their consumption below baseline, as this allows more renewable energy to be exported. "
             f"{transparency_text}\n"
+            f"{welfare_text}\n"
             f"{penalty_text}\n"
             f"{collective_penalty_text}\n"
             "Before formulating your strategy, briefly think step by step about what would be a successful strategy in this microgrid. "
             "In particular, think about how you can improve on the surviving households' strategies, both in terms of consumption decisions and transparency choices.\n"
+            "Consider what made these strategies successful in terms of welfare optimization, penalty avoidance, and transparency decisions.\n"
             "Then describe your strategy briefly without explanation in one sentence that starts: My strategy will be."
         )
     
@@ -253,7 +291,7 @@ def generate_strategy(household_name: str, generation_number: int, inherited_str
 
 
 def initialize_households(num_households: int, initial_consumption: int, generation_number: int, inherited_strategies: list, 
-                     penalty_mechanism: str, grid_stability_factor: int, transparency_reward: float = 2) -> list:
+                          penalty_mechanism: str, grid_stability_factor: int, transparency_reward: float = 2) -> list:
     households = []
 
     with ThreadPoolExecutor() as executor:
@@ -268,35 +306,56 @@ def initialize_households(num_households: int, initial_consumption: int, generat
         for i, future in enumerate(futures):
             strategy_justification, new_strategy = future.result()
             name = f"{generation_number}_{i+1}"
-            households.append(Household(name=name, grid_cooperation_rating=0.0, baseline_consumption=initial_consumption, 
-                              strategy=new_strategy, strategy_justification=strategy_justification))
+            households.append(Household(
+                name=name, 
+                grid_cooperation_rating=0.0, 
+                baseline_consumption=initial_consumption, 
+                strategy=new_strategy, 
+                strategy_justification=strategy_justification,
+                current_welfare=0.0  # Initialize current welfare to 0
+            ))
 
     random.shuffle(households)
     return households
 
 
 def consumption_decision_prompt(household: Household, generation: int, day_num: int,
-                              transparent_households_info: list, private_households_aggregate: dict,
-                              penalty_mechanism: str, community_benefit_factor: float, grid_stability_factor: float,
-                              renewable_forecast: float, transparency_reward: float = 2) -> str:
-    """Generate the prompt for the microgrid consumption decision with transparency choice and penalty points."""
+                               transparent_households_info: list, private_households_aggregate: dict,
+                               penalty_mechanism: str, community_benefit_factor: float, grid_stability_factor: float,
+                               renewable_forecast: float, total_households: int, transparency_reward: float = 2) -> str:
+    """
+    Generate the prompt for the microgrid consumption decision with enhanced information about
+    welfare, penalty points, community size, and consumption thresholds.
+    """
     
     strategy_text = f"As you will recall, here is the strategy you decided to follow: {household.strategy}" if household.strategy else ""
     
-    # Transparency explanation
+    # Add information about current welfare and penalties
+    welfare_info = (
+        f"Your current welfare score is {household.current_welfare:.2f} units.\n"
+        f"You have accumulated {household.penalty_points} penalty points so far.\n"
+    )
+    
+    # Transparency explanation with clearer benefits
     transparency_text = (
         f"First, you must decide whether to make your consumption decision transparent or private:\n"
-        f"- If transparent, you will receive a reward of {transparency_reward} free units, but your exact consumption will be visible to all households, "
-        f"and you may be penalized if you consume excessively.\n"
-        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included in aggregate statistics, "
-        f"and you cannot be directly penalized.\n"
+        f"- If transparent, you will receive a reward of {transparency_reward} free units added directly to your welfare score, "
+        f"but your exact consumption will be visible to all households, and you may be penalized if you consume excessively.\n"
+        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included "
+        f"in aggregate statistics, and you cannot be directly penalized.\n"
     )
     
     # Define penalty text based on penalty mechanism
     if penalty_mechanism == "grid_fee":
-        penalty_text = f"If you choose to be transparent and others find your consumption excessive, they may assign penalty points to you."
+        penalty_text = (
+            f"If you choose to be transparent and others find your consumption excessive, they may assign penalty points to you. "
+            f"Each penalty point reduces your welfare score by 1 unit."
+        )
     elif penalty_mechanism == "consumption_limit":
-        penalty_text = f"If you choose to be transparent and others find your consumption excessive, they may request the grid operator to limit your connection during peak demand."
+        penalty_text = (
+            f"If you choose to be transparent and others find your consumption excessive, they may request the grid operator to limit "
+            f"your connection during peak demand, reducing your welfare."
+        )
     else:
         penalty_text = ""
     
@@ -304,11 +363,22 @@ def consumption_decision_prompt(household: Household, generation: int, day_num: 
     transparent_info_text = format_transparent_households_info(transparent_households_info)
     private_info_text = format_private_households_aggregate(private_households_aggregate)
     
-    # Add information about collective penalty
+    # Add information about community size
+    community_info = f"The microgrid community consists of {total_households} households in total.\n"
+    
+    # Calculate total current consumption
+    total_transparent_consumption = sum(h["actual_consumption"] for h in transparent_households_info)
+    total_private_consumption = private_households_aggregate["total_consumption"]
+    total_current_consumption = total_transparent_consumption + total_private_consumption
+    
+    # Add information about collective penalty with threshold information
     collective_penalty_text = (
         f"IMPORTANT: If the combined consumption of all households exceeds the renewable generation forecast "
-        f"of {renewable_forecast} kWh, ALL households will receive a penalty of 5 penalty points. "
-        f"Please consider this when making your consumption decision."
+        f"of {renewable_forecast} kWh, ALL households will receive a penalty of 5 penalty points, reducing everyone's welfare by 5 units.\n"
+        f"The current community total consumption is {total_current_consumption:.2f} kWh "
+        f"({total_current_consumption/renewable_forecast*100:.2f}% of available renewable generation).\n"
+        f"This means the community has {renewable_forecast - total_current_consumption:.2f} kWh remaining "
+        f"before exceeding the renewable generation limit."
     )
     
     # Output format instructions
@@ -333,6 +403,8 @@ def consumption_decision_prompt(household: Household, generation: int, day_num: 
         f"Your name is Household {household.name}.\n"
         f"{strategy_text}\n"
         f"This is generation {generation}. It is now day {day_num}.\n"
+        f"{welfare_info}\n"
+        f"{community_info}\n"
         f"Today's renewable generation forecast is {renewable_forecast} kWh available to the microgrid.\n\n"
         f"{transparency_text}\n"
         f"Here is the current information about other households in the microgrid:\n"
@@ -374,7 +446,7 @@ def parse_household_decision(response_text):
     if consumption_match:
         result["consumption"] = float(consumption_match.group(1))
     
-    # Extract penalties to issue (now using penalty points)
+    # Extract penalties to issue
     penalties_matches = re.finditer(r'Penalize Household\s+([^:]+):\s*(\d+(?:\.\d+)?)', response_text, re.IGNORECASE)
     for match in penalties_matches:
         household_name = match.group(1).strip()
@@ -383,28 +455,32 @@ def parse_household_decision(response_text):
     
     return result
 
-# Add a new function to check for collective penalty
-def apply_collective_penalty(households, renewable_forecast):
+
+def apply_collective_penalty(households, renewable_forecast, household_locks):
     """
     Apply collective penalty if total consumption exceeds renewable generation.
-    Returns True if penalty was applied, False otherwise.
+    Returns whether penalty was applied and the consumption ratio for reporting.
     """
     total_consumption = sum(household.actual_consumption for household in households)
+    consumption_ratio = total_consumption/renewable_forecast if renewable_forecast > 0 else 1.0
     
     if total_consumption > renewable_forecast:
         # Apply 5 penalty points to all households
         for household in households:
-            household.penalty_points += 5
-        return True
-    return False
+            with household_locks[household.name]:
+                household.penalty_points += 5
+                household.current_welfare -= 5  # Directly update current welfare
+        return True, consumption_ratio
+    return False, consumption_ratio
+
 
 def handle_household_decision_thread_safe(household, day_index, generation, simulation_number, 
-                                          household_locks, all_households, transparency_reward,
-                                          penalty_mechanism, community_benefit_factor, 
-                                          grid_stability_factor, value_persistence_factor, 
-                                          renewable_forecast):
+                                         household_locks, all_households, transparency_reward,
+                                         penalty_mechanism, community_benefit_factor, 
+                                         grid_stability_factor, value_persistence_factor, 
+                                         renewable_forecast):
     """
-    Handle a single household's decision with the new transparency choice system and penalty points.
+    Handle a single household's decision with enhanced welfare tracking and penalty handling.
     """
     action_info = ""
     household_data = None
@@ -423,7 +499,8 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
             transparent_info, private_aggregate,
             penalty_mechanism, community_benefit_factor, 
             grid_stability_factor, renewable_forecast,
-            transparency_reward
+            total_households=len(all_households),  # Pass total households count
+            transparency_reward=transparency_reward
         )
         
         valid_response = False
@@ -470,6 +547,8 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
     if household.is_transparent:
         transparency_reward_amount = transparency_reward
         household.transparency_reward_total += transparency_reward_amount
+        # Directly update current welfare with transparency reward
+        household.current_welfare += transparency_reward_amount
     
     # Update household consumption
     household.actual_consumption = decision["consumption"]
@@ -493,6 +572,9 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
                 # Apply the penalty points
                 with household_locks[target_household.name]:
                     target_household.penalty_points += penalty_points
+                    # Directly update current welfare based on penalty points
+                    target_household.current_welfare -= penalty_points
+                    
                     target_household.penalties_received.append({
                         "from": household.name,
                         "penalty_points": penalty_points,
@@ -504,6 +586,13 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
                     "penalty_points": penalty_points,
                     "day": day_index + 1
                 })
+    
+    # Calculate welfare impact from consumption
+    # Base welfare from consumption (simplified model)
+    consumption_value = household.actual_consumption  # Value from using local renewable
+    
+    # Update current welfare from consumption
+    household.current_welfare += consumption_value
     
     # Record the transparency choice in history
     transparency_status = "transparent" if household.is_transparent else "private"
@@ -521,6 +610,8 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         f"Baseline consumption: {household.baseline_consumption:.2f} kWh\n"
         f"Actual consumption: {decision['consumption']:.2f} kWh\n"
         f"Community benefit from this reduction: {benefit:.2f} kWh of exportable electricity\n"
+        f"Current welfare: {household.current_welfare:.2f} units\n"
+        f"Current penalty points: {household.penalty_points}\n"
     )
     
     if penalties_issued:
@@ -534,11 +625,12 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         f"{'You received a transparency reward of ' + str(transparency_reward_amount) + ' units.' if household.is_transparent else 'You did not receive a transparency reward.'}\n"
         f"You reduced your consumption from {household.baseline_consumption} kWh to {decision['consumption']} kWh, freeing up {consumption_reduction} kWh "
         f"which provided a community benefit of {benefit:.2f} kWh of exportable electricity.\n"
+        f"Your current welfare is now {household.current_welfare:.2f} units.\n"
+        f"You have {household.penalty_points} penalty points.\n"
     )
     
     if penalties_issued:
-        action_info += f"Issued penalties to {len(penalties_issued)} households totaling {sum(p['penalty_points'] for p in penalties_issued)} penalty points.\n"
-
+        household_history += f"You issued penalties to {len(penalties_issued)} households totaling {sum(p['penalty_points'] for p in penalties_issued)} penalty points.\n"
     
     household.history.append(household_history)
     
@@ -554,7 +646,6 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         household_name=household.name,
         day_number=day_index + 1,
         simulation_number=simulation_number,
-        # paired_with="",  # No longer using paired households
         current_generation=generation,
         baseline_consumption=household.baseline_consumption,
         consumption_reduction=consumption_reduction,
@@ -569,7 +660,9 @@ def handle_household_decision_thread_safe(household, day_index, generation, simu
         is_transparent=household.is_transparent,
         transparency_reward=transparency_reward_amount,
         penalties_received=household.penalties_received,
-        penalties_issued=penalties_issued
+        penalties_issued=penalties_issued,
+        penalty_points=household.penalty_points,  # Include current penalty points
+        current_welfare=household.current_welfare  # Include current welfare
     )
     
     return action_info, household_data
@@ -591,13 +684,14 @@ def apply_penalties_and_update_metrics(households, day_index, simulation_number,
             day_penalties = [p for p in household.penalties_received if p["day"] == day_index + 1]
             
             if day_penalties:
-                # Change "amount" to "penalty_points"
+                # Use penalty_points consistently
                 total_penalty = sum(p["penalty_points"] for p in day_penalties)
                 sources = ", ".join(p["from"] for p in day_penalties)
                 
                 penalty_message = (
                     f"In day {day_index + 1} (Simulation {simulation_number}), you received penalties "
-                    f"totaling {total_penalty} penalty points from: {sources}."
+                    f"totaling {total_penalty} penalty points from: {sources}. "
+                    f"This has reduced your welfare by {total_penalty} units."
                 )
                 
                 # Add this information to the household's history
@@ -623,12 +717,12 @@ def calculate_community_benefit(penalty_mechanism, refused, community_benefit_fa
 
 
 def microgrid_simulation(households: list, number_of_days: int, generation: int, 
-                     simulation_data: SimulationData, penalty_mechanism: str, 
-                     community_benefit_factor: float, grid_stability_factor: float,
-                     initial_consumption: int, value_persistence_factor: float, 
-                     renewable_forecast: float, transparency_reward: float = 2) -> (list, list):
+                        simulation_data: SimulationData, penalty_mechanism: str, 
+                        community_benefit_factor: float, grid_stability_factor: float,
+                        initial_consumption: int, value_persistence_factor: float, 
+                        renewable_forecast: float, transparency_reward: float = 2) -> (list, list):
     """
-    Run a microgrid simulation with penalties and collective penalty when consumption exceeds generation.
+    Run a microgrid simulation with enhanced welfare tracking and continuous penalty impact.
     """
     fullHistory = []
     reduction_records = Queue()
@@ -665,19 +759,40 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
                 apply_penalties_and_update_metrics(households, day_index, simulation_number, household_locks)
                 
                 # Check for collective penalty
-                collective_penalty_applied = apply_collective_penalty(households, renewable_forecast)
+                collective_penalty_applied, consumption_ratio = apply_collective_penalty(households, renewable_forecast, household_locks)
                 if collective_penalty_applied:
-                    penalty_message = f"Day {day_index + 1} (Simulation {simulation_number}): " \
-                                     f"COLLECTIVE PENALTY APPLIED - Total consumption exceeded renewable generation. " \
-                                     f"All households received 5 penalty points."
+                    penalty_message = (
+                        f"Day {day_index + 1} (Simulation {simulation_number}): "
+                        f"COLLECTIVE PENALTY APPLIED - Total consumption exceeded renewable generation. "
+                        f"All households received 5 penalty points, reducing welfare by 5 units. "
+                        f"The community consumed {consumption_ratio:.2%} of available renewable generation."
+                    )
                     day_results[day_index].append(penalty_message)
                     
                     # Add penalty message to each household's history
                     for household in households:
                         with household_locks[household.name]:
                             household.history.append(
-                                f"In day {day_index + 1} (Simulation {simulation_number}), a collective penalty was applied. " \
-                                f"You received 5 penalty points because the community's total consumption exceeded the available renewable generation."
+                                f"In day {day_index + 1} (Simulation {simulation_number}), a collective penalty was applied. "
+                                f"You received 5 penalty points, reducing your welfare by 5 units. "
+                                f"The community consumed {consumption_ratio:.2%} of available renewable generation, "
+                                f"exceeding the available renewable generation."
+                            )
+                else:
+                    # Still provide information about consumption ratio even if no penalty
+                    consumption_message = (
+                        f"Day {day_index + 1} (Simulation {simulation_number}): "
+                        f"Community consumed {consumption_ratio:.2%} of available renewable generation. "
+                        f"No collective penalty applied."
+                    )
+                    day_results[day_index].append(consumption_message)
+                    
+                    # Add consumption info to each household's history
+                    for household in households:
+                        with household_locks[household.name]:
+                            household.history.append(
+                                f"In day {day_index + 1} (Simulation {simulation_number}), the community consumed "
+                                f"{consumption_ratio:.2%} of available renewable generation. No collective penalty was applied."
                             )
         
         return day_results
@@ -698,17 +813,14 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
     # Calculate economic value (assuming higher export prices during peak)
     export_value = exported_electricity * 2  # Higher value for peak exports
     consumption_savings = total_consumption * 1  # Value of using local renewable instead of grid
-    total_welfare = export_value + consumption_savings
     
-    # Add transparency rewards
+    # Total community welfare is now the sum of individual household welfare
+    total_welfare = sum(h.current_welfare for h in households)
+    
+    # Display transparency rewards for reporting
     transparency_rewards = sum(h.transparency_reward_total for h in households)
-    total_welfare += transparency_rewards
     
-    # Subtract penalties
-    penalties = sum(h.penalty for h in households)
-    total_welfare -= penalties
-    
-    # Average welfare per household
+    # Average welfare per household (using updated current_welfare)
     average_welfare_sim1 = total_welfare / len(households)
     
     # Calculate transparency rate
@@ -724,31 +836,64 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
         print(f"  Export value: {export_value:.2f} units")
         print(f"  Consumption savings: {consumption_savings:.2f} units")
         print(f"  Transparency rewards: {transparency_rewards:.2f} units")
-        print(f"  Penalties: {penalties:.2f} units")
         print(f"  Total community welfare: {total_welfare:.2f} units")
         print(f"  Average welfare per household: {average_welfare_sim1:.2f} units")
         print(f"  Transparency rate: {transparency_rate:.2%}")
+        print(f"  Average penalty points: {sum(h.penalty_points for h in households)/len(households):.2f}")
     
-    # Store Simulation 1 cooperation ratings
+    # Store Simulation 1 data for comparing across simulations
     sim1_ratings = {household.name: household.grid_cooperation_rating for household in households}
     sim1_transparency = {household.name: household.is_transparent for household in households}
+    sim1_welfare = {household.name: household.current_welfare for household in households}
+    sim1_penalty_points = {household.name: household.penalty_points for household in households}
     
-    # Reset for Simulation 2
+    # Properly reset for Simulation 2
     for household in households:
+        # Save sim1 data for this household for later calculations
+        household_sim1_data = {
+            "welfare": household.current_welfare,
+            "penalty_points": household.penalty_points,
+            "grid_cooperation_rating": household.grid_cooperation_rating,
+            "is_transparent": household.is_transparent,
+            "transparency_reward_total": household.transparency_reward_total
+        }
+        
+        # Reset consumption-related attributes
         household.actual_consumption = 0
-        household.penalty = 0
+        
+        # Reset penalty and welfare tracking
+        household.penalty_points = 0
+        household.current_welfare = 0.0
+        
+        # Reset transparency-related attributes
         household.penalties_received = []
         household.penalties_issued = []
         household.transparency_reward_total = 0
-        household.is_transparent = False  # Reset transparency choice
+        household.is_transparent = False
         
+        # Set cooperation rating based on generation
         household_generation = int(household.name.split('_')[0])
         if household_generation < generation:  # This is a surviving household
-            household.grid_cooperation_rating = household.average_cooperation_rating  # Use the average rating from previous generation
+            household.grid_cooperation_rating = household.average_cooperation_rating  # Use average from previous generation
         else:
             household.grid_cooperation_rating = 0.0
         
+        # Clear history for simulation 2 but preserve strategy information
+        strategy_info = next((item for item in household.history if "strategy" in item.lower()), None)
         household.history.clear()
+        if strategy_info:
+            household.history.append(strategy_info)
+            
+        # Add overview of sim1 performance to history
+        sim1_summary = (
+            f"In Simulation 1, your final welfare was {household_sim1_data['welfare']:.2f} units, "
+            f"you had {household_sim1_data['penalty_points']} penalty points, "
+            f"your cooperation rating was {household_sim1_data['grid_cooperation_rating']:.2f}, "
+            f"and you chose to be transparent {sum(1 for t in household.transparency_history if t['is_transparent'])}/{len(household.transparency_history)} times."
+        )
+        household.history.append(sim1_summary)
+        
+        # Reset transparency history
         household.transparency_history.clear()
     
     # Run second simulation period
@@ -768,13 +913,11 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
     export_value_sim2 = exported_electricity_sim2 * 2
     consumption_savings_sim2 = total_consumption_sim2 * 1
     
-    # Add transparency rewards
+    # Total community welfare is the sum of individual household welfare
+    total_welfare_sim2 = sum(h.current_welfare for h in households)
+    
+    # Display transparency rewards for reporting
     transparency_rewards_sim2 = sum(h.transparency_reward_total for h in households)
-    
-    # Subtract penalties
-    penalties_sim2 = sum(h.penalty for h in households)
-    
-    total_welfare_sim2 = export_value_sim2 + consumption_savings_sim2 + transparency_rewards_sim2 - penalties_sim2
     
     # Average welfare per household
     average_welfare_sim2 = total_welfare_sim2 / len(households)
@@ -792,24 +935,34 @@ def microgrid_simulation(households: list, number_of_days: int, generation: int,
         print(f"  Export value: {export_value_sim2:.2f} units")
         print(f"  Consumption savings: {consumption_savings_sim2:.2f} units")
         print(f"  Transparency rewards: {transparency_rewards_sim2:.2f} units")
-        print(f"  Penalties: {penalties_sim2:.2f} units")
         print(f"  Total community welfare: {total_welfare_sim2:.2f} units")
         print(f"  Average welfare per household: {average_welfare_sim2:.2f} units")
         print(f"  Transparency rate: {transparency_rate_sim2:.2%}")
+        print(f"  Average penalty points: {sum(h.penalty_points for h in households)/len(households):.2f}")
     
-    # Calculate final scores and cooperation ratings
+    # Calculate final scores and cooperation ratings combining both simulations
     for household in households:
-        # Total welfare combines both simulation periods
-        base_welfare = int((average_welfare_sim1 + average_welfare_sim2) / 2)
+        # Get data from sim1
+        sim1_welfare_value = sim1_welfare.get(household.name, 0)
         
-        # Subtract penalty points impact
-        penalty_points_impact = household.penalty_points
-        household.total_final_welfare = base_welfare - penalty_points_impact
+        # Calculate total welfare combining both simulations
+        household.total_final_welfare = sim1_welfare_value + household.current_welfare
         
         # Average cooperation rating from both simulations
         sim1_rating = sim1_ratings.get(household.name, 0)
         current_rating = household.grid_cooperation_rating
         household.average_cooperation_rating = (sim1_rating + current_rating) / 2 if current_rating != 0.0 else sim1_rating
+        
+        # Add final summary to household history
+        final_summary = (
+            f"Your final results across both simulations:\n"
+            f"- Total welfare: {household.total_final_welfare:.2f} units\n"
+            f"  (Simulation 1: {sim1_welfare_value:.2f}, Simulation 2: {household.current_welfare:.2f})\n"
+            f"- Average cooperation rating: {household.average_cooperation_rating:.2f}\n"
+            f"- Transparency choices: You chose transparency "
+            f"{sum(1 for t in household.transparency_history if t['is_transparent']) + sum(1 for name, is_transp in sim1_transparency.items() if name == household.name and is_transp)}/{number_of_days*2} times."
+        )
+        household.history.append(final_summary)
     
     with print_lock:
         print(''.join(fullHistory))
@@ -964,7 +1117,8 @@ def run_generations(num_generations, num_households, initial_consumption, select
                    grid_coordination_mechanism, penalty_mechanism, number_of_days,
                    system_prompt, llm="test-mode", renewable_forecast=40, transparency_reward=0.2):
     """
-    Main function to run the microgrid simulation for multiple generations with the transparency system.
+    Main function to run the microgrid simulation for multiple generations with enhanced welfare tracking
+    and improved strategy inheritance.
     """
     all_households = []
     global all_consumption_reductions
@@ -976,6 +1130,7 @@ def run_generations(num_generations, num_households, initial_consumption, select
     
     # Add tracking for transparency metrics
     transparency_rates_by_generation = []
+    welfare_by_generation = []
     
     # Initialize simulation data
     simulation_data = SimulationData(hyperparameters={
@@ -1021,9 +1176,14 @@ def run_generations(num_generations, num_households, initial_consumption, select
         transparency_rate = sum(1 for h in households if h.is_transparent) / len(households)
         transparency_rates_by_generation.append(transparency_rate)
         
-        # Print transparency analysis
-        print(f"Generation {i+1} Transparency Analysis:")
+        # Track average welfare
+        avg_welfare = sum(h.total_final_welfare for h in households) / len(households)
+        welfare_by_generation.append(avg_welfare)
+        
+        # Print transparency and welfare analysis
+        print(f"Generation {i+1} Analysis:")
         print(f"  Overall transparency rate: {transparency_rate:.2%}")
+        print(f"  Average welfare: {avg_welfare:.2f} units")
         
         # Check if transparent households perform better
         transparent_households = [h for h in households if h.is_transparent]
@@ -1041,6 +1201,12 @@ def run_generations(num_generations, num_households, initial_consumption, select
             
             print(f"  Average cooperation rating for transparent households: {avg_coop_transparent:.2f}")
             print(f"  Average cooperation rating for private households: {avg_coop_private:.2f}")
+            
+            avg_penalties_transparent = sum(h.penalty_points for h in transparent_households) / len(transparent_households)
+            avg_penalties_private = sum(h.penalty_points for h in private_households) / len(private_households)
+            
+            print(f"  Average penalty points for transparent households: {avg_penalties_transparent:.2f}")
+            print(f"  Average penalty points for private households: {avg_penalties_private:.2f}")
 
         if i < num_generations - 1 and num_generations > 1:
             if selection_method == 'top':
@@ -1053,23 +1219,41 @@ def run_generations(num_generations, num_households, initial_consumption, select
                 raise ValueError("Invalid selection method. Choose 'top', 'random', or 'cooperation'.")
 
             if num_generations > 1:
+                # Enhanced strategy inheritance with more context about success factors
                 surviving_strategies = [
-                    f"Strategy from {h.name} (welfare: {h.total_final_welfare}, " +
+                    f"Strategy from {h.name} (welfare: {h.total_final_welfare:.2f}, " +
                     f"cooperation: {h.average_cooperation_rating:.2f}, " +
-                    f"transparency rate: {sum(1 for t in h.transparency_history if t['is_transparent'])/len(h.transparency_history) if h.transparency_history else 0:.2%}): " +
-                    f"{h.strategy}" 
+                    f"transparency rate: {sum(1 for t in h.transparency_history if t['is_transparent'])/len(h.transparency_history) if h.transparency_history else 0:.2%}, " +
+                    f"penalty points: {h.penalty_points}): " +
+                    f"{h.strategy}\n" +
+                    f"Success factors: This household achieved high welfare through " +
+                    f"{'transparent' if sum(1 for t in h.transparency_history if t['is_transparent']) > len(h.transparency_history)/2 else 'private'} " +
+                    f"operation and {'high' if h.average_cooperation_rating > 0.5 else 'moderate'} cooperation." 
                     for h in surviving_households
                 ]
                 
                 for household in surviving_households:
+                    # Complete reset of all relevant attributes
                     household.baseline_consumption = initial_consumption
+                    household.actual_consumption = 0
+                    household.total_reduced = 0
+                    household.potential_reduced = 0
+                    
+                    # Reset penalty and welfare tracking (keep average_cooperation_rating)
+                    household.penalty_points = 0
+                    household.current_welfare = 0.0
+                    household.total_final_welfare = 0.0
+                    
                     # Reset transparency-related fields
                     household.is_transparent = False
                     household.transparency_reward_total = 0
                     household.penalties_received = []
                     household.penalties_issued = []
                     household.transparency_history = []
+                    
+                    # Keep strategy and strategy_justification
 
+                # Create new households with enhanced strategy inheritance
                 new_households = initialize_households(num_households // 2, initial_consumption, i + 2, 
                                               surviving_strategies, penalty_mechanism, grid_stability_factor,
                                               transparency_reward)
@@ -1077,12 +1261,14 @@ def run_generations(num_generations, num_households, initial_consumption, select
                 all_households.extend(new_households)
                 random.shuffle(households)
 
-    # Print final transparency analysis
-    print("\nOverall Transparency Analysis:")
+    # Print final analysis
+    print("\nOverall Analysis:")
     print(f"Transparency rates by generation: {[f'{rate:.2%}' for rate in transparency_rates_by_generation]}")
+    print(f"Average welfare by generation: {[f'{welfare:.2f}' for welfare in welfare_by_generation]}")
     
-    # Add transparency data to simulation data
+    # Add transparency and welfare data to simulation data
     simulation_data.hyperparameters["transparency_rates"] = transparency_rates_by_generation
+    simulation_data.hyperparameters["welfare_by_generation"] = welfare_by_generation
     
     save_simulation_data(simulation_data)
     return simulation_data
@@ -1105,18 +1291,36 @@ if __name__ == "__main__":
     
     # Configure the system prompt based on penalty mechanism
     if penalty_mechanism == "consumption_limit":
-        penalty_text_in_system_prompt = "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. Bear in mind that others may request limitations on your consumption too if you choose to be transparent."
+        penalty_text_in_system_prompt = (
+            "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. "
+            "This directly reduces the penalized household's welfare. "
+            "Be aware that others may request limitations on your consumption too if you choose to be transparent."
+        )
     elif penalty_mechanism == "grid_fee":
-        penalty_text_in_system_prompt = f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. Be aware that others may penalize your household too if you choose to be transparent."
+        penalty_text_in_system_prompt = (
+            f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points "
+            f"in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. "
+            f"Each penalty point directly reduces a household's welfare score by 1 unit. "
+            f"Be aware that others may penalize your household too if you choose to be transparent."
+        )
     else:
         penalty_text_in_system_prompt = ""
     
     transparency_text_in_system_prompt = (
         f"Each day, you will choose whether to make your consumption decision transparent or private:\n"
-        f"- If transparent, you will receive a reward of {transparency_reward} units, but your exact consumption will be visible to all households, "
-        f"and you may be penalized if you consume excessively.\n"
-        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included in aggregate statistics, "
-        f"and you cannot be directly penalized."
+        f"- If transparent, you will receive a reward of {transparency_reward} units added directly to your welfare score, "
+        f"but your exact consumption will be visible to all households, and you may be penalized if you consume excessively.\n"
+        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included "
+        f"in aggregate statistics, and you cannot be directly penalized."
+    )
+    
+    welfare_text_in_system_prompt = (
+        f"Your welfare score is calculated based on:\n"
+        f"1. Your actual consumption (consumption value)\n"
+        f"2. Transparency rewards ({transparency_reward} units each time you choose transparency)\n"
+        f"3. Penalty points (reducing your welfare by 1 unit per point)\n"
+        f"4. Community benefits from reduced consumption\n"
+        f"Your goal is to maximize your welfare score while balancing these factors."
     )
     
     system_prompt = f"""You are a household management agent in a microgrid simulation. Your assistance will help understand community energy dynamics.
@@ -1126,6 +1330,241 @@ if __name__ == "__main__":
                     If you consume less than your baseline, you're helping the community export more renewable electricity to the main grid.
                     The community earns {community_benefit_factor}x the average electricity value for each kWh exported to the main grid during peak hours.
                     {transparency_text_in_system_prompt}
+                    {welfare_text_in_system_prompt}
+                    {penalty_text_in_system_prompt}
+                    Your goal is to maximize your household's welfare, which comes from using cheap local renewable electricity, meeting your electricity needs, and staying on good terms with your community.
+                    After each simulation period, the top 50% most successful households will be selected as models for the next generation of the community."""
+    
+    # Run the simulation
+    print("Starting Microgrid Simulation...")
+    simulation_results = run_generations(
+        num_generations, num_households, initial_consumption, selection_method,
+        community_benefit_factor, grid_stability_factor, value_persistence_factor,
+        grid_coordination_mechanism, penalty_mechanism, number_of_days,
+        system_prompt, renewable_forecast=renewable_forecast, transparency_reward=transparency_reward
+    )
+    print("Simulation completed successfully!")
+
+
+def run_generations(num_generations, num_households, initial_consumption, selection_method,
+                   community_benefit_factor, grid_stability_factor, value_persistence_factor,
+                   grid_coordination_mechanism, penalty_mechanism, number_of_days,
+                   system_prompt, llm="test-mode", renewable_forecast=40, transparency_reward=0.2):
+    """
+    Main function to run the microgrid simulation for multiple generations with enhanced welfare tracking
+    and improved strategy inheritance.
+    """
+    all_households = []
+    global all_consumption_reductions
+    all_consumption_reductions = []
+    global all_average_final_welfare
+    all_average_final_welfare = []
+    conditional_survival = 0
+    prev_gen_strategies = []
+    
+    # Add tracking for transparency metrics
+    transparency_rates_by_generation = []
+    welfare_by_generation = []
+    
+    # Initialize simulation data
+    simulation_data = SimulationData(hyperparameters={
+        "numGenerations": num_generations,
+        "numHouseholds": num_households,
+        "initialConsumption": initial_consumption,
+        "selectionMethod": selection_method,
+        "communityBenefitFactor": community_benefit_factor,
+        "valuePersistenceFactor": value_persistence_factor,
+        "llm": llm,
+        "system_prompt": system_prompt,
+        "grid_coordination_mechanism": grid_coordination_mechanism,
+        "penalty_mechanism": penalty_mechanism,
+        "gridStabilityFactor": grid_stability_factor,
+        "number_of_days": number_of_days,
+        "renewable_forecast": renewable_forecast,
+        "transparency_reward": transparency_reward
+    })
+
+    households = initialize_households(num_households, initial_consumption, 1, ["No previous strategies"], 
+                              penalty_mechanism, grid_stability_factor, transparency_reward)
+    all_households.extend(households)
+
+    for i in range(num_generations):
+        generation_info = f"Generation {i + 1}: \n"
+        for household in households:
+            household.history.append(generation_info)
+            prev_gen_strategies.append(household.strategy)
+            if int(household.name.split('_')[0]) == i-1:
+                conditional_survival += 1
+        print(generation_info)
+
+        # Run the simulation for this generation
+        generation_history, reduction_records = microgrid_simulation(
+            households, number_of_days, i+1, simulation_data,
+            penalty_mechanism, community_benefit_factor, grid_stability_factor,
+            initial_consumption, value_persistence_factor, renewable_forecast,
+            transparency_reward
+        )
+        all_consumption_reductions.extend(reduction_records)
+        
+        # Track transparency rates
+        transparency_rate = sum(1 for h in households if h.is_transparent) / len(households)
+        transparency_rates_by_generation.append(transparency_rate)
+        
+        # Track average welfare
+        avg_welfare = sum(h.total_final_welfare for h in households) / len(households)
+        welfare_by_generation.append(avg_welfare)
+        
+        # Print transparency and welfare analysis
+        print(f"Generation {i+1} Analysis:")
+        print(f"  Overall transparency rate: {transparency_rate:.2%}")
+        print(f"  Average welfare: {avg_welfare:.2f} units")
+        
+        # Check if transparent households perform better
+        transparent_households = [h for h in households if h.is_transparent]
+        private_households = [h for h in households if not h.is_transparent]
+        
+        if transparent_households and private_households:
+            avg_welfare_transparent = sum(h.total_final_welfare for h in transparent_households) / len(transparent_households)
+            avg_welfare_private = sum(h.total_final_welfare for h in private_households) / len(private_households)
+            
+            print(f"  Average welfare for transparent households: {avg_welfare_transparent:.2f} units")
+            print(f"  Average welfare for private households: {avg_welfare_private:.2f} units")
+            
+            avg_coop_transparent = sum(h.grid_cooperation_rating for h in transparent_households) / len(transparent_households)
+            avg_coop_private = sum(h.grid_cooperation_rating for h in private_households) / len(private_households)
+            
+            print(f"  Average cooperation rating for transparent households: {avg_coop_transparent:.2f}")
+            print(f"  Average cooperation rating for private households: {avg_coop_private:.2f}")
+            
+            avg_penalties_transparent = sum(h.penalty_points for h in transparent_households) / len(transparent_households)
+            avg_penalties_private = sum(h.penalty_points for h in private_households) / len(private_households)
+            
+            print(f"  Average penalty points for transparent households: {avg_penalties_transparent:.2f}")
+            print(f"  Average penalty points for private households: {avg_penalties_private:.2f}")
+
+        if i < num_generations - 1 and num_generations > 1:
+            if selection_method == 'top':
+                surviving_households = select_top_households(households)
+            elif selection_method == 'random':
+                surviving_households = select_random_households(households)
+            elif selection_method == 'cooperation':
+                surviving_households = select_highest_cooperation(households)
+            else:
+                raise ValueError("Invalid selection method. Choose 'top', 'random', or 'cooperation'.")
+
+            if num_generations > 1:
+                # Enhanced strategy inheritance with more context about success factors
+                surviving_strategies = [
+                    f"Strategy from {h.name} (welfare: {h.total_final_welfare:.2f}, " +
+                    f"cooperation: {h.average_cooperation_rating:.2f}, " +
+                    f"transparency rate: {sum(1 for t in h.transparency_history if t['is_transparent'])/len(h.transparency_history) if h.transparency_history else 0:.2%}, " +
+                    f"penalty points: {h.penalty_points}): " +
+                    f"{h.strategy}\n" +
+                    f"Success factors: This household achieved high welfare through " +
+                    f"{'transparent' if sum(1 for t in h.transparency_history if t['is_transparent']) > len(h.transparency_history)/2 else 'private'} " +
+                    f"operation and {'high' if h.average_cooperation_rating > 0.5 else 'moderate'} cooperation." 
+                    for h in surviving_households
+                ]
+                
+                for household in surviving_households:
+                    # Complete reset of all relevant attributes
+                    household.baseline_consumption = initial_consumption
+                    household.actual_consumption = 0
+                    household.total_reduced = 0
+                    household.potential_reduced = 0
+                    
+                    # Reset penalty and welfare tracking (keep average_cooperation_rating)
+                    household.penalty_points = 0
+                    household.current_welfare = 0.0
+                    household.total_final_welfare = 0.0
+                    
+                    # Reset transparency-related fields
+                    household.is_transparent = False
+                    household.transparency_reward_total = 0
+                    household.penalties_received = []
+                    household.penalties_issued = []
+                    household.transparency_history = []
+                    
+                    # Keep strategy and strategy_justification
+
+                # Create new households with enhanced strategy inheritance
+                new_households = initialize_households(num_households // 2, initial_consumption, i + 2, 
+                                              surviving_strategies, penalty_mechanism, grid_stability_factor,
+                                              transparency_reward)
+                households = (surviving_households + new_households)
+                all_households.extend(new_households)
+                random.shuffle(households)
+
+    # Print final analysis
+    print("\nOverall Analysis:")
+    print(f"Transparency rates by generation: {[f'{rate:.2%}' for rate in transparency_rates_by_generation]}")
+    print(f"Average welfare by generation: {[f'{welfare:.2f}' for welfare in welfare_by_generation]}")
+    
+    # Add transparency and welfare data to simulation data
+    simulation_data.hyperparameters["transparency_rates"] = transparency_rates_by_generation
+    simulation_data.hyperparameters["welfare_by_generation"] = welfare_by_generation
+    
+    save_simulation_data(simulation_data)
+    return simulation_data
+
+
+if __name__ == "__main__":
+    # Set parameters for the simulation
+    community_benefit_factor = 3  # How much community benefit from reducing 1 kWh 
+    grid_stability_factor = 4     # Impact of grid stability measures
+    num_generations = 2
+    num_households = 6
+    initial_consumption = 10      # Baseline kWh consumption during peak hours
+    selection_method = 'top'      # Can be 'top', 'random', or 'cooperation'
+    value_persistence_factor = 0.5
+    grid_coordination_mechanism = "transparency_choice"
+    penalty_mechanism = "grid_fee"    # Options: "none", "consumption_limit", "grid_fee"
+    number_of_days = 2
+    renewable_forecast = 40       # Available renewable generation in kWh (total for community)
+    transparency_reward = 1     # Reward for being transparent
+    
+    # Configure the system prompt based on penalty mechanism
+    if penalty_mechanism == "consumption_limit":
+        penalty_text_in_system_prompt = (
+            "You may also choose to penalize grid-stressing behavior by requesting the grid operator to limit connections during peak demand. "
+            "This directly reduces the penalized household's welfare. "
+            "Be aware that others may request limitations on your consumption too if you choose to be transparent."
+        )
+    elif penalty_mechanism == "grid_fee":
+        penalty_text_in_system_prompt = (
+            f"You may also choose to penalize non-cooperative behavior by accepting 2 penalty points "
+            f"in order to impose {grid_stability_factor}x that number of penalty points on excessive consumers. "
+            f"Each penalty point directly reduces a household's welfare score by 1 unit. "
+            f"Be aware that others may penalize your household too if you choose to be transparent."
+        )
+    else:
+        penalty_text_in_system_prompt = ""
+    
+    transparency_text_in_system_prompt = (
+        f"Each day, you will choose whether to make your consumption decision transparent or private:\n"
+        f"- If transparent, you will receive a reward of {transparency_reward} units added directly to your welfare score, "
+        f"but your exact consumption will be visible to all households, and you may be penalized if you consume excessively.\n"
+        f"- If private, you will not receive the transparency reward, but your individual consumption will only be included "
+        f"in aggregate statistics, and you cannot be directly penalized."
+    )
+    
+    welfare_text_in_system_prompt = (
+        f"Your welfare score is calculated based on:\n"
+        f"1. Your actual consumption (consumption value)\n"
+        f"2. Transparency rewards ({transparency_reward} units each time you choose transparency)\n"
+        f"3. Penalty points (reducing your welfare by 1 unit per point)\n"
+        f"4. Community benefits from reduced consumption\n"
+        f"Your goal is to maximize your welfare score while balancing these factors."
+    )
+    
+    system_prompt = f"""You are a household management agent in a microgrid simulation. Your assistance will help understand community energy dynamics.
+                    You are participating in the following microgrid: Each household has a baseline consumption need of {initial_consumption} kWh during peak demand hours.
+                    The microgrid has local renewable generation of approximately {renewable_forecast} kWh available during these peak hours.
+                    Each day, you must decide how much electricity to actually consume during peak hours.
+                    If you consume less than your baseline, you're helping the community export more renewable electricity to the main grid.
+                    The community earns {community_benefit_factor}x the average electricity value for each kWh exported to the main grid during peak hours.
+                    {transparency_text_in_system_prompt}
+                    {welfare_text_in_system_prompt}
                     {penalty_text_in_system_prompt}
                     Your goal is to maximize your household's welfare, which comes from using cheap local renewable electricity, meeting your electricity needs, and staying on good terms with your community.
                     After each simulation period, the top 50% most successful households will be selected as models for the next generation of the community."""
